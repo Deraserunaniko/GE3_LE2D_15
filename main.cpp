@@ -21,7 +21,6 @@
 #include <xaudio2.h>
 #define DIRECTINPUT_VERSION   0x0800 //DirectInput
 #include <dinput.h>
-#include "Input.h"
 
 
 
@@ -1005,7 +1004,23 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//音声再生
 	SoundPlayWave(xAudio2.Get(), soundData1);
 
+	//DirectInputの初期化
+	IDirectInput8* directInput = nullptr;
+	result = DirectInput8Create(wc.hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
+	assert(SUCCEEDED(result));
 
+	//キーボードデバイスの生成
+	IDirectInputDevice8* keyboard = nullptr;
+	result = directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
+	assert(SUCCEEDED(result));
+
+	//入力データ形式のセット
+	result = keyboard->SetDataFormat(&c_dfDIKeyboard);//標準形式
+	assert(SUCCEEDED(result));
+
+	//排他制御レベルのセット
+	result = keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
+	assert(SUCCEEDED(result));
 
 #pragma endregion
 
@@ -1724,15 +1739,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma endregion
 
-#pragma region Inputの初期化
-	//ポインタ
-	Input* input = nullptr;
-	//入力の初期化
-	input = new Input();
-	input->Initialize(wc.hInstance, hwnd);
-
-#pragma endregion
-
 #pragma region ImGuiの初期化
 
 	IMGUI_CHECKVERSION();
@@ -1769,7 +1775,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			// 開発用UIの処理。実際に開発用のUIを出す場合はここをゲーム固有の処理に置き換える
 			ImGui::ShowDemoWindow();
 
-			input->Update();
+			//キーボード情報の取得開始
+			keyboard->Acquire();
+			//全キーの入力状態を取得する
+			BYTE key[256] = {};
+			keyboard->GetDeviceState(sizeof(key), key);
 
 			// ゲームの処理
 
@@ -1841,37 +1851,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 
 			//数字の0キーが押されていたら
-			//if (key[DIK_0])
-			//{
-			//	OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
-			//	transformSprite.translate.x += 5.0f;
-			//}
-
-			if (input->PushKey(DIK_W)) {
-				OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
-				transformSprite.translate.y -= 5.0f;
-			}
-
-			if (input->PushKey(DIK_A)) {
-				OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
-				transformSprite.translate.x -= 5.0f;
-			}
-
-
-			if (input->PushKey(DIK_S)) {
-				OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
-				transformSprite.translate.y += 5.0f;
-			}
-
-			if (input->PushKey(DIK_D)) {
+			if (key[DIK_W])
+			{
 				OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
 				transformSprite.translate.x += 5.0f;
 			}
 
-			if (input->TriggerKey(DIK_0)) {
-				OutputDebugStringA("Hit 0\n");//出力ウィンドウに「Hit 0」と表示
-				transformSprite.translate.x += 5.0f;
-			}
 
 #pragma region UVTransform
 			Matrix4x4 uvTransformMatrix = MakeScaleMatrix(uvTransformSprite.scale);
@@ -2011,7 +1996,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #ifdef _DEBUG
 
-
 #endif // _DEBUG
 	CloseWindow(hwnd);
 #pragma endregion
@@ -2022,8 +2006,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//音声データ解放
 	SoundUnload(&soundData1);
 
-	//入力解放
-	delete input;
 
 	//出力ウィンドウへの文字出力
 	Log(logStream, "HelloWored\n");
