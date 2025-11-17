@@ -21,7 +21,7 @@
 #include <xaudio2.h>
 #define DIRECTINPUT_VERSION   0x0800 //DirectInput
 #include <dinput.h>
-#include "Input.h"
+
 
 
 #include "externals/imgui//imgui.h"
@@ -30,7 +30,6 @@
 #include "externals/DirectXTex/d3dx12.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #include "externals/DirectXTex/DirectXTex.h"
-
 
 
 #pragma comment(lib,"d3d12.lib")
@@ -837,8 +836,8 @@ void SoundPlayWave(IXAudio2* xAudio2, const SoundData& soundData) {
 	buf.Flags = XAUDIO2_END_OF_STREAM;
 
 	//波形のデータの再生
-	result = pSourceVoice->SubmitSourceBuffer(&buf);
-	result = pSourceVoice->Start();
+	/*result = pSourceVoice->SubmitSourceBuffer(&buf);
+	result = pSourceVoice->Start();*/
 }
 
 // Windowsアプリでのエントリーポイント(main関数)
@@ -1004,7 +1003,23 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	//音声再生
 	SoundPlayWave(xAudio2.Get(), soundData1);
 
+	//DirectInputの初期化
+	IDirectInput8* directInput = nullptr;
+	result = DirectInput8Create(wc.hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
+	assert(SUCCEEDED(result));
 
+	//キーボードデバイスの生成
+	IDirectInputDevice8* keyboard = nullptr;
+	result = directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
+	assert(SUCCEEDED(result));
+
+	//入力データ形式のセット
+	result = keyboard->SetDataFormat(&c_dfDIKeyboard);//標準形式
+	assert(SUCCEEDED(result));
+
+	//排他制御レベルのセット
+	result = keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
+	assert(SUCCEEDED(result));
 
 #pragma endregion
 
@@ -1721,16 +1736,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 	directionalLightData->intensity = 1.0f;
 
-#pragma endregion
-
-#pragma region Inputの初期化
-	//ポインタ
-	Input* input = nullptr;
-	//入力の初期化
-	input = new Input();
-	input->Initialize(wc.hInstance, hwnd);
-	//入力解放
-	delete input;
 #pragma endregion
 
 #pragma region ImGuiの初期化
