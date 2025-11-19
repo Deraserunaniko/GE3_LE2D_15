@@ -6,7 +6,6 @@
 
 using namespace MatrixMath; 
 
-
 // 行列の加法
 Matrix4x4 MatrixMath::Add(const Matrix4x4& m1, const Matrix4x4& m2) {
     Matrix4x4 result = {};
