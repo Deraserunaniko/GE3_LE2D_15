@@ -17,16 +17,19 @@
 // Debug用のあれやこれを使えるようにする
 #include <dbghelp.h>
 #include <strsafe.h>
-#include <dbghelp.h>
-#include <strsafe.h>
+#include <wrl.h>
+#include <xaudio2.h>
+#define DIRECTINPUT_VERSION   0x0800 //DirectInput
+#include <dinput.h>
+
+
+
 #include "externals/imgui//imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
 #include "externals/DirectXTex/d3dx12.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #include "externals/DirectXTex/DirectXTex.h"
-
-
 
 #pragma comment(lib,"d3d12.lib")
 #pragma comment(lib,"dxgi.lib")
@@ -680,8 +683,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	SetUnhandledExceptionFilter(ExportDump);
 
 #pragma region log
-
-
 
 	// ログのディレクトリを用意
 	std::filesystem::create_directory("logs");
