@@ -18,24 +18,21 @@
 #include <dbghelp.h>
 #include <strsafe.h>
 #include <wrl.h>
-#include <xaudio2.h>
-#define DIRECTINPUT_VERSION   0x0800 //DirectInput
 #include <dinput.h>
-
-
-
 #include "externals/imgui//imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
 #include "externals/DirectXTex/d3dx12.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #include "externals/DirectXTex/DirectXTex.h"
-
 #pragma comment(lib,"d3d12.lib")
 #pragma comment(lib,"dxgi.lib")
 #pragma comment(lib,"Dbghelp.lib")
 #pragma comment(lib,"dxguid.lib")
 #pragma comment(lib,"dxcompiler.lib")
+#pragma comment(lib,"dinput8.lib")
+#pragma comment(lib,"dxguid.lib")
+
 
 using namespace MatrixMath;
 
@@ -63,15 +60,6 @@ struct Transform {
 	Vector3 scale;
 	Vector3 rotate;
 	Vector3 translate;
-};
-// Transform変数を作る
-Transform transform{ {1.0f,1.0f,1.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
-Transform cameraTransfrom{ {1.0f,1.0f,1.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,-10.0f} };
-Transform transformSprite{ {1.0f,1.0f,1.0f,},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
-Transform uvTransformSprite{
-	{1.0f,1.0f,1.0f},
-	{0.0f,0.0f,0.0f},
-	{0.0f,0.0f,0.0f}
 };
 
 struct Material
@@ -108,6 +96,66 @@ struct ModelData {
 	MaterialData material;
 };
 
+
+struct D3DResourceLeakChecker {
+	~D3DResourceLeakChecker()
+	{
+		//リソースリークチェック
+		Microsoft::WRL::ComPtr<IDXGIDebug1> debug;
+		if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug)))) {
+			debug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_ALL);
+			debug->ReportLiveObjects(DXGI_DEBUG_APP, DXGI_DEBUG_RLO_ALL);
+			debug->ReportLiveObjects(DXGI_DEBUG_D3D12, DXGI_DEBUG_RLO_ALL);
+		}
+	}
+};
+
+
+struct ChunkHeader
+{
+	char id[4];//チャンク毎のID
+	int32_t size;//チャンクサイズ
+};
+
+struct RifferHeader
+{
+	ChunkHeader chunk;
+	char type[4];
+};
+
+struct FormatChunk
+{
+	ChunkHeader chunk;
+	WAVEFORMATEX fmt;
+};
+
+struct SoundData
+{
+	//波形のフォーマット
+	WAVEFORMATEX wfex;
+	//バッファの先頭アドレス
+	BYTE* pBuffer;
+	//バッファのサイズ
+	unsigned int bufferSize;
+};
+
+#pragma endregion
+
+#pragma region クラス
+//class ResourceObject {
+//public:
+//	ResourceObject(ID3D12Resource* resource)
+//		:resource_(resource)
+//	{}
+//	~ResourceObject() {
+//		if (resource_) {
+//			resource_->Release();
+//		}
+//	}
+//	ID3D12Resource* Get() { return resource_; }
+//private:
+//	ID3D12Resource* resource_;
+//};
 #pragma endregion
 
 #pragma region Creash関数
@@ -291,15 +339,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 #pragma region CompileShader関数
 
-IDxcBlob* CompileShader(
+Microsoft::WRL::ComPtr<IDxcBlob> CompileShader(
 	// CompilerするShaderファイルへのパス
 	const std::wstring& filePath,
 	// Compilerに仕様するProfile
 	const wchar_t* profile,
 	// 初期化で生成したものを4つ
-	IDxcUtils* dxcUtils,
-	IDxcCompiler3* dxcCompiler,
-	IDxcIncludeHandler* includeHandler,
+	Microsoft::WRL::ComPtr<IDxcUtils> dxcUtils,
+	Microsoft::WRL::ComPtr<IDxcCompiler3> dxcCompiler,
+	Microsoft::WRL::ComPtr<IDxcIncludeHandler> includeHandler,
 	std::ostream& os) {
 
 	// 1.hlslファイルを読み込む
@@ -307,7 +355,7 @@ IDxcBlob* CompileShader(
 	// これからシェーダーをコンパイルする旨をログに出す
 	Log(os, ConvertString(std::format(L"Begin CompileShader,path:{},profile:{}\n", filePath, profile)));
 	// hislファイルを読む
-	IDxcBlobEncoding* shaderSource = nullptr;
+	Microsoft::WRL::ComPtr<IDxcBlobEncoding>  shaderSource = nullptr;
 	HRESULT hr = dxcUtils->LoadFile(filePath.c_str(), nullptr, &shaderSource);
 	// 読めなかったら止める
 	assert(SUCCEEDED(hr));
@@ -332,7 +380,7 @@ IDxcBlob* CompileShader(
 		&shaderSourceBuffer, // 読み込んだファイル
 		arguments,           // コンバイルオプション
 		_countof(arguments), // コンバイルオプションの数
-		includeHandler,      // includeが含んだ諸々
+		includeHandler.Get(),      // includeが含んだ諸々
 		IID_PPV_ARGS(&shaderResult) //コンバイル結果
 	);
 	// コンバイルエラーではなくdxcが起動できないなど致命的な状況
@@ -341,7 +389,7 @@ IDxcBlob* CompileShader(
 	// 3. 警告・エラーが出てないか確認する
 
 	// 警告・エラーがでていたらログに出して止める
-	IDxcBlobUtf8* shaderError = nullptr;
+	Microsoft::WRL::ComPtr<IDxcBlobUtf8>  shaderError = nullptr;
 	shaderResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&shaderError), nullptr);
 	if (shaderError != nullptr && shaderError->GetStringLength() != 0) {
 		Log(os, shaderError->GetStringPointer());
@@ -352,14 +400,14 @@ IDxcBlob* CompileShader(
 	// 4.Compile結果を受け取って返す
 
 	// コンバイル結果から実行用のパイナリ部分を取得
-	IDxcBlob* shaderBlob = nullptr;
+	Microsoft::WRL::ComPtr<IDxcBlob> shaderBlob = nullptr;
 	hr = shaderResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderBlob), nullptr);
 	assert(SUCCEEDED(hr));
 	// 成功したログを出す
 	Log(os, ConvertString(std::format(L"Compile Succeeded,path:{},profile:{}\n", filePath, profile)));
 	// もう使わないリソースを解放
-	shaderSource->Release();
-	shaderResult->Release();
+	/*shaderSource->Release();
+	shaderResult->Release();*/
 	// 実行用のパイナリを返却
 	return shaderBlob;
 }
@@ -419,7 +467,8 @@ ModelData LoadObjFile(const std::string& directoryPath, const std::string& filen
 		if (identifier == "v") {
 			Vector4 position;
 			s >> position.x >> position.y >> position.z;
-			position.x *= -1.0f;
+			//position.x *= -1.0f;
+			position.x *= 1.0f;
 			position.w = 1.0f;
 			positions.push_back(position);
 		} else if (identifier == "vt") {
@@ -430,7 +479,8 @@ ModelData LoadObjFile(const std::string& directoryPath, const std::string& filen
 		} else if (identifier == "vn") {
 			Vector3 normal;
 			s >> normal.x >> normal.y >> normal.z;
-			normal.x *= -1.0f;
+			//normal.x *= -1.0f;
+			normal.x *= 1.0f;
 			normals.push_back(normal);
 		} else if (identifier == "f") {
 			VertexData triangle[3];
@@ -477,10 +527,10 @@ ModelData LoadObjFile(const std::string& directoryPath, const std::string& filen
 
 #pragma region Resource関数
 
-ID3D12Resource* CreateBufferResource(ID3D12Device* device, size_t sizeInBytes) {
-	ID3D12Resource* vertexResource = nullptr;
+Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferResource(Microsoft::WRL::ComPtr<ID3D12Device> device, size_t sizeInBytes) {
+	Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource = nullptr;
 	// DXGIファクトリー
-	IDXGIFactory7* dxgiFactory = nullptr;
+	Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr;
 	// HRESULTはWindows系のエラーコードであり、
 	// 関数が成功したかどうかをSUCCEDEDマクロで判定できる
 	HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
@@ -512,18 +562,18 @@ ID3D12Resource* CreateBufferResource(ID3D12Device* device, size_t sizeInBytes) {
 
 #pragma region DescriptorHeap作成関数
 
-ID3D12DescriptorHeap* CreateDescriptorHeap(
-	ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE heapType,
+Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> CreateDescriptorHeap(
+	Microsoft::WRL::ComPtr<ID3D12Device> device, D3D12_DESCRIPTOR_HEAP_TYPE heapType,
 	UINT numDescriptors, bool shaderVisible) {
 
 	// DXGIファクトリー
-	IDXGIFactory7* dxgiFactory = nullptr;
+	Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr;
 	// HRESULTはWindows系のエラーコードであり、
 	// 関数が成功したかどうかをSUCCEDEDマクロで判定できる
 	HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
 
 	// ディスクリプタヒープの生成
-	ID3D12DescriptorHeap* descriptorHeap = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap = nullptr;
 	D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc{};
 	descriptorHeapDesc.Type = heapType; // 連打―ターゲットビュー用
 	descriptorHeapDesc.NumDescriptors = numDescriptors; // ダブルバッファ用に2つ。多くても別に構わない。
@@ -557,7 +607,7 @@ DirectX::ScratchImage LoadTexture(const std::string& filePath) {
 
 }
 
-ID3D12Resource* CreateTextureResource(ID3D12Device* device, const DirectX::TexMetadata& metadata) {
+Microsoft::WRL::ComPtr<ID3D12Resource>CreateTextureResource(const Microsoft::WRL::ComPtr<ID3D12Device> device, const DirectX::TexMetadata& metadata) {
 
 	// metadataを基にResourceの設定
 	D3D12_RESOURCE_DESC resourceDesc{};
@@ -574,7 +624,7 @@ ID3D12Resource* CreateTextureResource(ID3D12Device* device, const DirectX::TexMe
 	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT; // 細かい設定を行う
 
 	// Resourceの生成
-	ID3D12Resource* resource = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Resource> resource = nullptr;
 	HRESULT hr = device->CreateCommittedResource(
 		&heapProperties,
 		D3D12_HEAP_FLAG_NONE,
@@ -588,20 +638,20 @@ ID3D12Resource* CreateTextureResource(ID3D12Device* device, const DirectX::TexMe
 }
 
 [[nodiscard]] // 03_00EX
-ID3D12Resource* UploadTextureData(ID3D12Resource* texture, const DirectX::ScratchImage& mipImages, ID3D12Device* device,
-	ID3D12GraphicsCommandList* commandList) {
+Microsoft::WRL::ComPtr<ID3D12Resource> UploadTextureData(Microsoft::WRL::ComPtr<ID3D12Resource> texture, const DirectX::ScratchImage& mipImages, Microsoft::WRL::ComPtr<ID3D12Device> device,
+	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList) {
 
 	std::vector<D3D12_SUBRESOURCE_DATA> subresources;
-	DirectX::PrepareUpload(device, mipImages.GetImages(), mipImages.GetImageCount(), mipImages.GetMetadata(), subresources);
-	uint64_t intermediateSize = GetRequiredIntermediateSize(texture, 0, static_cast<UINT>(subresources.size()));
-	ID3D12Resource* intermediateResource = CreateBufferResource(device, intermediateSize);
+	DirectX::PrepareUpload(device.Get(), mipImages.GetImages(), mipImages.GetImageCount(), mipImages.GetMetadata(), subresources);
+	uint64_t intermediateSize = GetRequiredIntermediateSize(texture.Get(), 0, static_cast<UINT>(subresources.size()));
+	Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource = CreateBufferResource(device, intermediateSize);
 
-	UpdateSubresources(commandList, texture, intermediateResource, 0, 0, static_cast<UINT>(subresources.size()), subresources.data());
+	UpdateSubresources(commandList.Get(), texture.Get(), intermediateResource.Get(), 0, 0, static_cast<UINT>(subresources.size()), subresources.data());
 
 	D3D12_RESOURCE_BARRIER barrier = {};
 	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	barrier.Transition.pResource = texture;
+	barrier.Transition.pResource = texture.Get();
 	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
 	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_GENERIC_READ;
@@ -610,7 +660,7 @@ ID3D12Resource* UploadTextureData(ID3D12Resource* texture, const DirectX::Scratc
 	return intermediateResource;
 }
 
-ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t width, int32_t height) {
+Microsoft::WRL::ComPtr<ID3D12Resource> CreateDepthStencilTextureResource(Microsoft::WRL::ComPtr<ID3D12Device> device, int32_t width, int32_t height) {
 
 	// 生成するResourceの設定
 	D3D12_RESOURCE_DESC resourceDesc{};
@@ -633,7 +683,7 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 	depthClearValue.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; // フォーマット。Resourceと合わせる
 
 	// Resorceの生成
-	ID3D12Resource* resource = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Resource> resource = nullptr;
 	HRESULT hr = device->CreateCommittedResource(
 		&heapProperties, // Heepの設定
 		D3D12_HEAP_FLAG_NONE, // Heapの特殊な設定。特になし
@@ -652,7 +702,7 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 
 #pragma region DescriptorHandleの関数化
 
-D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
+D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap, uint32_t descriptorSize, uint32_t index)
 {
 	D3D12_CPU_DESCRIPTOR_HANDLE handleCPU = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
 
@@ -661,7 +711,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE GetCPUDescriptorHandle(ID3D12DescriptorHeap* descrip
 	return handleCPU;
 }
 
-D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(ID3D12DescriptorHeap* descriptorHeap, uint32_t descriptorSize, uint32_t index)
+D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptorHeap, uint32_t descriptorSize, uint32_t index)
 {
 	D3D12_GPU_DESCRIPTOR_HANDLE handleGPU = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
 
@@ -672,9 +722,120 @@ D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(ID3D12DescriptorHeap* descrip
 
 #pragma endregion
 
+#pragma region Comptr関数
+
+//Microsoft::WRL::ComPtr<Microsoft::WRL::ComPtr<ID3D12Resource>>CreateTextureResource(const Microsoft::WRL::ComPtr<Microsoft::WRL::ComPtr<ID3D12Device>>& device, const DirectX::TexMetadata& metadata);
+
+#pragma endregion
+
+
+////音声データの読み込み
+//SoundData SoundLoadWave(const char* filename)
+//{
+//	//HRESULT result;
+//
+//
+//	//ファイルオープン
+//	std::ifstream file;
+//
+//	file.open(filename, std::ios_base::binary);
+//
+//	assert(file.is_open());
+//
+//	//wavデータ読み込み
+//	RifferHeader riff;
+//	file.read((char*)&riff, sizeof(riff));
+//
+//	if (strncmp(riff.chunk.id, "RIFF", 4) != 0) {
+//		assert(0);
+//	}
+//
+//	if (strncmp(riff.type, "WAVE", 4) != 0) {
+//		assert(0);
+//	}
+//	FormatChunk format = {};
+//	file.read((char*)&format, sizeof(ChunkHeader));
+//	if (strncmp(format.chunk.id, "fmt ", 4) != 0) {
+//		assert(0);
+//	}
+//
+//	//チャンク本体の読み込み
+//	assert(format.chunk.size <= sizeof(format.fmt));
+//	file.read((char*)&format.fmt, format.chunk.size);
+//
+//
+//	ChunkHeader data;
+//	file.read((char*)&data, sizeof(data));
+//
+//	if (strncmp(data.id, "JUNK", 4) == 0) {
+//		file.seekg(data.size, std::ios_base::cur);
+//
+//		file.read((char*)&data, sizeof(data));
+//	}
+//
+//	if (strncmp(data.id, "data", 4) != 0) {
+//		assert(0);
+//	}
+//
+//	char* pBuffer = new char[data.size];
+//	file.read(pBuffer, data.size);
+//
+//	//Waveファイルを閉じる
+//	file.close();
+//
+//	//Dataチャンクのデータ部(波形データ)の読み来み
+//	//ファイルクローズ
+//
+//
+//	//読み込んだ音声データをreturn
+//	SoundData soundData = {};
+//
+//	soundData.wfex = format.fmt;
+//	soundData.pBuffer = reinterpret_cast<BYTE*>(pBuffer);
+//	soundData.bufferSize = data.size;
+//
+//	return soundData;
+//}
+//
+//void SoundUnload(SoundData* soundData)
+//{
+//	delete[] soundData->pBuffer;
+//
+//	soundData->pBuffer = 0;
+//	soundData->bufferSize = 0;
+//	soundData->wfex = {};
+//}
+
+////音声再生
+//void SoundPlayWave(IXAudio2* xAudio2, const SoundData& soundData) {
+//	HRESULT result;
+//
+//	//波形フォーマットをもとにSourceVoiceの生成
+//	IXAudio2SourceVoice* pSourceVoice = nullptr;
+//	result = xAudio2->CreateSourceVoice(&pSourceVoice, &soundData.wfex);
+//	assert(SUCCEEDED(result));
+//
+//	//再生する波形のデータの設定
+//	XAUDIO2_BUFFER buf{};
+//	buf.pAudioData = soundData.pBuffer;
+//	buf.AudioBytes = soundData.bufferSize;
+//	buf.Flags = XAUDIO2_END_OF_STREAM;
+//
+//	//波形のデータの再生
+//	result = pSourceVoice->SubmitSourceBuffer(&buf);
+//	result = pSourceVoice->Start();
+//}
 
 // Windowsアプリでのエントリーポイント(main関数)
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+
+	/*Microsoft::WRL::ComPtr<IXAudio2> xAudio2;
+	IXAudio2MasteringVoice* masterVoice;*/
+
+	D3DResourceLeakChecker leakCheck;
+
+
+
 	// COMの初期化
 	CoInitializeEx(0, COINIT_MULTITHREADED);
 
@@ -684,9 +845,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma region log
 
+
+
 	// ログのディレクトリを用意
 	std::filesystem::create_directory("logs");
-	// 現在時刻を取得（UTC時刻）
+	// 現在時刻を取得（UTC時刻)
 	std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 	// ログファイルの名前にコンマ何秒はいらないので、削って秒にする
 	std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>
@@ -697,12 +860,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	std::string dateString = std::format("{:%Y%m%d_%H%M%S}", localTime);
 	//時刻を使ってファイル名を決定
 	std::string logFilePath = std::string("logs/") + dateString + ".log";
-	// ファイルを作って書き込み準備
 	std::ofstream logStream(logFilePath);
 
 #pragma endregion
 
-#pragma region ウィンドウ
+#pragma region Window
 
 	WNDCLASS wc{};
 	// ウィンドウプロシーシャ
@@ -747,7 +909,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #ifdef _DEBUG
 
-	ID3D12Debug1* debugController = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Debug1> debugController = nullptr;
 	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
 		// デバックレイヤーを有効化する
 		debugController->EnableDebugLayer();
@@ -759,7 +921,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region DirectX12を初期化しよう
 
 	// DXGIファクトリー
-	IDXGIFactory7* dxgiFactory = nullptr;
+	Microsoft::WRL::ComPtr<IDXGIFactory7> dxgiFactory = nullptr;
 	// HRESULTはWindows系のエラーコードであり、
 	// 関数が成功したかどうかをSUCCEDEDマクロで判定できる
 	HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(&dxgiFactory));
@@ -768,7 +930,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	assert(SUCCEEDED(hr));
 
 	// 使用するアダプタ用の変数。最初にnullptrを入れておく
-	IDXGIAdapter4* useAdapter = nullptr;
+	Microsoft::WRL::ComPtr<IDXGIAdapter4> useAdapter = nullptr;
 	// いい順にアダプタを頼む
 	for (UINT i = 0; dxgiFactory->EnumAdapterByGpuPreference(i,
 		DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&useAdapter)) !=
@@ -789,7 +951,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	// 適切なアダプタが見つからなかったので起動できない
 	assert(useAdapter != nullptr);
 
-	ID3D12Device* device = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Device> device = nullptr;
 
 
 
@@ -801,7 +963,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	// 高い順に生成できるか試していく
 	for (size_t i = 0; i < _countof(featureLevels); ++i) {
 		// 採用したアダプターでデバイスを生成
-		hr = D3D12CreateDevice(useAdapter, featureLevels[i], IID_PPV_ARGS(&device));
+		hr = D3D12CreateDevice(useAdapter.Get(), featureLevels[i], IID_PPV_ARGS(&device));
 		// 指定した機能レベルでデバイスが生成できたかを確認
 		if (SUCCEEDED(hr)) {
 			// 生成できたのでログ出力を行ってループを抜ける
@@ -814,13 +976,41 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	assert(device != nullptr);
 	Log(logStream, ConvertString(L"Complete create D3D12Device!!!\n"));// 初期化完了のログを出す
 
+
+	////音声読み込み
+	//SoundData soundData1 = SoundLoadWave("resources/fanfare.wav");
+
+
+	//HRESULT result = XAudio2Create(&xAudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
+
+	//result = xAudio2->CreateMasteringVoice(&masterVoice);
+
+	////音声再生
+	//SoundPlayWave(xAudio2.Get(), soundData1);
+
+	////DirectInputの初期化
+	//IDirectInput8* directInput = nullptr;
+	//result = DirectInput8Create(wc.hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
+	//assert(SUCCEEDED(result));
+
+	////キーボードデバイスの生成
+	//IDirectInputDevice8* keyboard = nullptr;
+	//result = directInput->CreateDevice(GUID_SysKeyboard, &keyboard, NULL);
+	//assert(SUCCEEDED(result));
+
+	////入力データ形式のセット
+	//result = keyboard->SetDataFormat(&c_dfDIKeyboard);//標準形式
+	//assert(SUCCEEDED(result));
+
+	//排他制御レベルのセット
+
 #pragma endregion
 
 
 
 #ifdef _DEBUG
 
-	ID3D12InfoQueue* infoQueue = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue = nullptr;
 	if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
 		// やばいエラー時に止まる
 		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true);
@@ -853,26 +1043,26 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region CommandList
 
 	// コマンドキューを生成する
-	ID3D12CommandQueue* commandQueue = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12CommandQueue> commandQueue = nullptr;
 	D3D12_COMMAND_QUEUE_DESC commandQuesDesc{};
 	hr = device->CreateCommandQueue(&commandQuesDesc, IID_PPV_ARGS(&commandQueue));
 	// コマンドキューの生成が上手くいかなかったので起動できない
 
 	assert(SUCCEEDED(hr));
 	// コマンドアフロケータを生成
-	ID3D12CommandAllocator* commandAllocator = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator = nullptr;
 	hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
 	// コマンドアロケータの生成が上手くいかなかったので起動出来ない
 	assert(SUCCEEDED(hr));
 
 	// コマンドリストを生成する
-	ID3D12GraphicsCommandList* commandList = nullptr;
-	hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
+	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList = nullptr;
+	hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&commandList));
 	// コマンドリストの生成が上手くいかなかったので起動できない
 	assert(SUCCEEDED(hr));
 
 	// スワップチェーンを生成する
-	IDXGISwapChain4* swapChain = nullptr;
+	Microsoft::WRL::ComPtr<IDXGISwapChain4> swapChain = nullptr;
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 	swapChainDesc.Width = kClientWidth;   //画面の幅。ウィンドウのクライアント領域を同じものにしていく
 	swapChainDesc.Height = kClientHeight; //画面の高さ。ウィンドウのクライアント領域を同じようにしておく
@@ -882,19 +1072,19 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	swapChainDesc.BufferCount = 2; // ダブルバッファ
 	swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; // モニタにうつしたら、中身を破棄
 	// コマンドキュー、ウィンドウハンドル、設定を渡して生成する
-	hr = dxgiFactory->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, reinterpret_cast<IDXGISwapChain1**>(&swapChain));
+	hr = dxgiFactory->CreateSwapChainForHwnd(commandQueue.Get(), hwnd, &swapChainDesc, nullptr, nullptr, reinterpret_cast<IDXGISwapChain1**>(swapChain.GetAddressOf()));
 	assert(SUCCEEDED(hr));
 
 	// RTV用のヒープでディスクリプタの数は2。RTVはshader内で触るものではないので,ShaderVisibleはfalse
-	ID3D12DescriptorHeap* rtvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
 	// SPV用のヒープでディスクリプタの数は128。SRVはShader内で触るものなので、ShaderVisibleはtrue
-	ID3D12DescriptorHeap* srvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
 	// DSV用のヒープでディスクリプタの数は1。DSVはShader内で触るものではないので,ShaderVisibleはfalse
-	ID3D12DescriptorHeap* dsvDescriptorHaap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvDescriptorHaap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 
 
 	// SwapChainからResourceを引っ張ってくる
-	ID3D12Resource* swapChainResources[2] = { nullptr };
+	Microsoft::WRL::ComPtr<ID3D12Resource> swapChainResources[2] = { nullptr };
 	hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&swapChainResources[0]));
 	// うまく取得できなければ起動できない
 	assert(SUCCEEDED(hr));
@@ -924,11 +1114,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[2];
 	// まず1つ目を作る。1つ目は最初の所に作る。つくる場所をこちらで指定して上げる必要がある
 	rtvHandles[0] = rtvStartHandle;
-	device->CreateRenderTargetView(swapChainResources[0], &rtvDesc, rtvHandles[0]);
+	device->CreateRenderTargetView(swapChainResources[0].Get(), &rtvDesc, rtvHandles[0]);
 	// ２つ目のディスクリプタハンドルを得る(自力)
 	rtvHandles[1].ptr = rtvHandles[0].ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	// ２つ目を作る
-	device->CreateRenderTargetView(swapChainResources[1], &rtvDesc, rtvHandles[1]);
+	device->CreateRenderTargetView(swapChainResources[1].Get(), &rtvDesc, rtvHandles[1]);
 
 
 
@@ -942,8 +1132,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 	const DirectX::TexMetadata& metadata2 = mipImages2.GetMetadata();
 
-	ID3D12Resource* textureResource2 = CreateTextureResource(device, metadata2);
-	ID3D12Resource* intermediateResource2 = UploadTextureData(textureResource2, mipImages2, device, commandList);
+	Microsoft::WRL::ComPtr<ID3D12Resource> textureResource2 = CreateTextureResource(device, metadata2).Get();
+	Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource2 = UploadTextureData(textureResource2, mipImages2, device, commandList);
 
 
 	//2枚目のSRVを作る
@@ -963,15 +1153,20 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
 
 	//SRVを生成
-	device->CreateShaderResourceView(textureResource2, &srvDesc2, textureSrvHandleCPU2);
+	device->CreateShaderResourceView(textureResource2.Get(), &srvDesc2, textureSrvHandleCPU2);
 #pragma endregion
 
 
+
+
+
 	// Textrueを読んで転送する
-	DirectX::ScratchImage mipImages = LoadTexture("resources/fence.png");
+	DirectX::ScratchImage mipImages = LoadTexture("resources/uvChecker.png");
 	const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
-	ID3D12Resource* textrueResource = CreateTextureResource(device, metadata);
-	ID3D12Resource* intermediateResource = UploadTextureData(textrueResource, mipImages, device, commandList);
+	//Microsoft::WRL::ComPtr<Microsoft::WRL::ComPtr<ID3D12Resource>> textureeResource = CreateTextureResource(device, metadata);
+	// Update the code to correctly retrieve the raw pointer from the ComPtr.  
+	Microsoft::WRL::ComPtr<ID3D12Resource> textureResource = CreateTextureResource(device, metadata).Get();
+	Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource = UploadTextureData(textureResource, mipImages, device, commandList);
 
 	// metaDataを基にSRVの設定
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -987,17 +1182,17 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	textureSrvHandleCPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	textureSrvHandleGPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	// SRVの生成
-	device->CreateShaderResourceView(textrueResource, &srvDesc, textureSrvHandleCPU);
+	device->CreateShaderResourceView(textureResource.Get(), &srvDesc, textureSrvHandleCPU);
 
 	// DSVの設定
 
 	// DepthStencilTextureをウィンドウのサイズで作成
-	ID3D12Resource* deptStencilResource = CreateDepthStencilTextureResource(device, kClientWidth, kClientHeight);
+	Microsoft::WRL::ComPtr<ID3D12Resource> depthStencilResource = CreateDepthStencilTextureResource(device, kClientWidth, kClientHeight);
 	D3D12_DEPTH_STENCIL_VIEW_DESC devDesc{};
 	devDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; // Format。基本的にはResourceに合わせる
 	devDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D; //2dTexture
 	// DSVHeapの設定にDSVをつくる
-	device->CreateDepthStencilView(deptStencilResource, &devDesc, dsvDescriptorHaap->GetCPUDescriptorHandleForHeapStart());
+	device->CreateDepthStencilView(depthStencilResource.Get(), &devDesc, dsvDescriptorHaap->GetCPUDescriptorHandleForHeapStart());
 
 	// DepthStenciLstateの設定
 	D3D12_DEPTH_STENCIL_DESC depthStencilDesc{};
@@ -1014,7 +1209,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region Fence
 
 	// 初期化0でFenceを作る
-	ID3D12Fence* fence = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Fence> fence = nullptr;
 	uint64_t fenceValue = 0;
 	hr = device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 	assert(SUCCEEDED(hr));
@@ -1027,14 +1222,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region DXCの初期化
 
 	// dxcCompilerを初期化
-	IDxcUtils* dxcUtils = nullptr;
-	IDxcCompiler3* dxcCompiler = nullptr;
+	Microsoft::WRL::ComPtr<IDxcUtils> dxcUtils = nullptr;
+	Microsoft::WRL::ComPtr<IDxcCompiler3> dxcCompiler = nullptr;
 	hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils));
 	assert(SUCCEEDED(hr));
 	hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler));
 
 	// 現時点でincludeはしないが、includeに対応するための設定を行っておく
-	IDxcIncludeHandler* includeHandler = nullptr;
+	Microsoft::WRL::ComPtr<IDxcIncludeHandler> includeHandler = nullptr;
 	hr = dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
 	assert(SUCCEEDED(hr));
 
@@ -1059,6 +1254,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	descriptorRange[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND; // offsetを自動計算
 
 
+	D3D12_DESCRIPTOR_RANGE descriptorRangeForInstancing[1] = {};
+	descriptorRangeForInstancing[0].BaseShaderRegister = 0;//0から始まる
+	descriptorRangeForInstancing[0].NumDescriptors = 1;//数は1つ
+	descriptorRangeForInstancing[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;//SRVを使う
+	descriptorRangeForInstancing[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+
+
 
 	// PootParameter作成。複数設定できるので配列。
 	D3D12_ROOT_PARAMETER rootParameters[4] = {};
@@ -1066,9 +1269,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL; //PixelShaderで使う 
 	rootParameters[0].Descriptor.ShaderRegister = 0; //レジスタ番号0とバインド 
 
-	rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; // CBVを使う
+	rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; // Descriptorを使う
 	rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX; //VertexShaderで使う 
-	rootParameters[1].Descriptor.ShaderRegister = 0; //レジスタ番号0とバインド 
+	rootParameters[1].DescriptorTable.pDescriptorRanges = descriptorRangeForInstancing;//Tableの中身の配列を指定
+	rootParameters[1].DescriptorTable.NumDescriptorRanges = _countof(descriptorRangeForInstancing);//Tableで利用する数
 
 	rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; //DescriptorTableを使う
 	rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL; // PixelShaderで使う
@@ -1099,8 +1303,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 
 	// シリアライズしてバイナリにする
-	ID3D10Blob* signatrueBlob = nullptr;
-	ID3D10Blob* errorBlob = nullptr;
+	Microsoft::WRL::ComPtr<ID3D10Blob> signatrueBlob = nullptr;
+	Microsoft::WRL::ComPtr<ID3D10Blob> errorBlob = nullptr;
 	hr = D3D12SerializeRootSignature(&descriptionRootSignature,
 		D3D_ROOT_SIGNATURE_VERSION_1, &signatrueBlob, &errorBlob);
 	if (FAILED(hr)) {
@@ -1110,7 +1314,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	}
 
 	// バイナリを元に生成
-	ID3D12RootSignature* rootSignatrue = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignatrue = nullptr;
 	hr = device->CreateRootSignature(0,
 		signatrueBlob->GetBufferPointer(), signatrueBlob->GetBufferSize(),
 		IID_PPV_ARGS(&rootSignatrue));
@@ -1143,36 +1347,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	blendDesc.RenderTarget[0].RenderTargetWriteMask =
 		D3D12_COLOR_WRITE_ENABLE_ALL;
 	blendDesc.RenderTarget[0].BlendEnable = TRUE;
-	//通常
 	blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
 	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
 	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-
-	//加算合成
-	/*blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;*/
-
-	//減算合成
-	/*blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_REV_SUBTRACT;
-	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;*/
-
-	//乗算合成
-	//blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_ZERO;
-	//blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-	//blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_SRC_COLOR;
-
-	//スクリーン合成
-	/*blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_INV_DEST_COLOR;
-	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;*/
-
-	//共通
 	blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
 	blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
 	blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
-
 
 	// RasterizerStateの設定
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
@@ -1182,17 +1362,17 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	rasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
 
 	// Shaderをコンパイルする
-	IDxcBlob* vertexShaderBlob = CompileShader(L"Object3D.VS.hlsl",
+	Microsoft::WRL::ComPtr<IDxcBlob> vertexShaderBlob = CompileShader(L"Particle.VS.hlsl",
 		L"vs_6_0", dxcUtils, dxcCompiler, includeHandler, logStream);
 	assert(vertexShaderBlob != nullptr);
 
-	IDxcBlob* pixelShaderBlob = CompileShader(L"Object3D.PS.hlsl",
+	Microsoft::WRL::ComPtr<IDxcBlob> pixelShaderBlob = CompileShader(L"Particle.PS.hlsl",
 		L"ps_6_0", dxcUtils, dxcCompiler, includeHandler, logStream);
 	assert(pixelShaderBlob != nullptr);
 
 	// PSOを生成する
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc{};
-	graphicsPipelineStateDesc.pRootSignature = rootSignatrue; // RootSignatrue
+	graphicsPipelineStateDesc.pRootSignature = rootSignatrue.Get(); // RootSignatrue
 	graphicsPipelineStateDesc.InputLayout = inputLayoutDesc;  // InputLayout
 	graphicsPipelineStateDesc.VS = { vertexShaderBlob->GetBufferPointer(),
 	vertexShaderBlob->GetBufferSize() }; // VertexShader
@@ -1216,7 +1396,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 
 	// 実際に生成
-	ID3D12PipelineState* graphicsPinelineState = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12PipelineState> graphicsPinelineState = nullptr;
 	hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc,
 		IID_PPV_ARGS(&graphicsPinelineState));
 	assert(SUCCEEDED(hr));
@@ -1227,48 +1407,48 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region 頂点データの作成とビュー
 
 	//// 実際に頂点リソースを作る
-	//ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * 6);
+	Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource = CreateBufferResource(device, sizeof(VertexData) * 6);
 
-	//// 頂点バッファビューを作成する
-	//D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
-	//// リソースの先頭のアドレスから使う
-	//vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
-	//// 使用するリソースのサイズは頂点3つ分
-	//vertexBufferView.SizeInBytes = sizeof(VertexData) * 6;
-	//// 1頂点あたりのサイズ
-	//vertexBufferView.StrideInBytes = sizeof(VertexData);
+	// 頂点バッファビューを作成する
+	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+	// リソースの先頭のアドレスから使う
+	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
+	// 使用するリソースのサイズは頂点3つ分
+	vertexBufferView.SizeInBytes = sizeof(VertexData) * 6;
+	// 1頂点あたりのサイズ
+	vertexBufferView.StrideInBytes = sizeof(VertexData);
 
-	//// 頂点リソースにデータを書き込む
-	//VertexData* vertexData = nullptr;
-	//// 書き込むためのアドレス取得
-	//vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-	//// 左下
-	//vertexData[0] = { -0.5f,-0.5f,0.0f,1.0f };
-	//vertexData[0].texcoord = { 0.0f,1.0f };
-	//// 上
-	//vertexData[1] = { 0.0f,0.5f,0.0f,1.0f };
-	//vertexData[1].texcoord = { 0.5f,0.0f };
-	//// 右下
-	//vertexData[2] = { 0.5f,-0.5f,0.0f,1.0f };
-	//vertexData[2].texcoord = { 1.0f,1.0f };
+	// 頂点リソースにデータを書き込む
+	VertexData* vertexData = nullptr;
+	// 書き込むためのアドレス取得
+	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
+	// 左下
+	vertexData[0] = { -0.5f,-0.5f,0.0f,1.0f };
+	vertexData[0].texcoord = { 0.0f,1.0f };
+	// 上
+	vertexData[1] = { 0.0f,0.5f,0.0f,1.0f };
+	vertexData[1].texcoord = { 0.5f,0.0f };
+	// 右下
+	vertexData[2] = { 0.5f,-0.5f,0.0f,1.0f };
+	vertexData[2].texcoord = { 1.0f,1.0f };
 
 
-	//// 左下2
-	//vertexData[3].position = { -0.5f,-0.5f,0.5f,1.0f };
-	//vertexData[3].texcoord = { 0.0f,1.0f };
-	//// 上2
-	//vertexData[4].position = { 0.0f,0.0f,0.0f,1.0f };
-	//vertexData[4].texcoord = { 0.5f,0.0f };
-	//// 右下2
-	//vertexData[5].position = { 0.5f,-0.5f,-0.5f,1.0f };
-	//vertexData[5].texcoord = { 1.0f,1.0f };
+	// 左下2
+	vertexData[3].position = { -0.5f,-0.5f,0.5f,1.0f };
+	vertexData[3].texcoord = { 0.0f,1.0f };
+	// 上2
+	vertexData[4].position = { 0.0f,0.0f,0.0f,1.0f };
+	vertexData[4].texcoord = { 0.5f,0.0f };
+	// 右下2
+	vertexData[5].position = { 0.5f,-0.5f,-0.5f,1.0f };
+	vertexData[5].texcoord = { 1.0f,1.0f };
 
 
 #pragma endregion
 
 #pragma region Index用
 
-	ID3D12Resource* indexResourceSprite = CreateBufferResource(device, sizeof(uint32_t) * 6);
+	Microsoft::WRL::ComPtr<ID3D12Resource> indexResourceSprite = CreateBufferResource(device, sizeof(uint32_t) * 6);
 
 	D3D12_INDEX_BUFFER_VIEW indexBufferViewSprite{};
 
@@ -1291,7 +1471,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 
 	// Sprite用のTransformationMatirx用のリソースを作る。Matrix4x4 一つ分のサイズを用意する
-	ID3D12Resource* transformationMatrixResourceSprite = CreateBufferResource(device, sizeof(TransformationMatrix));
+	Microsoft::WRL::ComPtr<ID3D12Resource> transformationMatrixResourceSprite = CreateBufferResource(device, sizeof(TransformationMatrix));
 	// データを書き込む
 	Matrix4x4* transformationMatirxDataSprite = nullptr;
 
@@ -1303,7 +1483,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region Spriteの実装
 
 	// Sprite用の頂点リソースを作る
-	ID3D12Resource* vertexResourceSprite = CreateBufferResource(device, sizeof(VertexData) * 6);
+	Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceSprite = CreateBufferResource(device, sizeof(VertexData) * 6);
 
 	// 頂点バッファビューを作成する
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferViewSprite{};
@@ -1313,6 +1493,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	vertexBufferViewSprite.SizeInBytes = sizeof(VertexData) * 6;
 	// 1頂点あたりのサイズ
 	vertexBufferViewSprite.StrideInBytes = sizeof(VertexData);
+
+
+
 
 	VertexData* vertexDataSprite = nullptr;
 	// 書き込むためのアドレス取得
@@ -1338,23 +1521,146 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma endregion
 
+	const uint32_t kNumInstance = 10;//インスタンス用
+	//Instancing用のTransformationMatrixを作る
+	Microsoft::WRL::ComPtr<ID3D12Resource>instancingResource = CreateBufferResource(device, sizeof(TransformationMatrix) * kNumInstance);
+	//書き込むためのアドレスを取得
+	TransformationMatrix* instancingData = nullptr;
+	instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
+	//単位行列を書き込んでおく
+	for (uint32_t index = 0; index < kNumInstance; index++) {
+		instancingData[index].WVP = MakeIdentity4x4();
+		instancingData[index].World = MakeIdentity4x4();
+	}
+
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC instancingSrvDesc{};
+
+	instancingSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	instancingSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	instancingSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	instancingSrvDesc.Buffer.FirstElement = 0;
+	instancingSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+	instancingSrvDesc.Buffer.NumElements = kNumInstance;
+	instancingSrvDesc.Buffer.StructureByteStride = sizeof(TransformationMatrix);
+	D3D12_CPU_DESCRIPTOR_HANDLE instancingSrvHandleCPU = GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 4);
+	D3D12_GPU_DESCRIPTOR_HANDLE instancingSrvHandleGPU = GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 4);
+	device->CreateShaderResourceView(instancingResource.Get(), &instancingSrvDesc, instancingSrvHandleCPU);
+
+
+	Transform transforms[kNumInstance];
+	for (uint32_t index = 0; index < kNumInstance; ++index) {
+		transforms[index].scale = { 1.0f,1.0f,1.0f };
+		transforms[index].rotate = { 0.0f,0.0f,0.0f };
+		transforms[index].translate = { index * 0.1f,index * 0.1f,index * 0.1f };
+	}
+
 #pragma region ModelDataを使う
 	//ModelDataを使う
 	//モデルの読み込み
-	//ModelData modelData = LoadObjFile("resources", "axis2.obj");
-	ModelData modelData = LoadObjFile("resources", "fence.obj");
-	//頂点リソースを作る
-	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
-	//頂点バッファビューを作成する
-	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
-	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();//リソースの先頭のアドレスから使う
-	vertexBufferView.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());//使用するリソースのサイズは頂点のサイズ
-	vertexBufferView.StrideInBytes = sizeof(VertexData);//1頂点のサイズ
 
-	//頂点リソースにデータを書き込む
-	VertexData* vertexData = nullptr;
-	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));//書き込むためのアドレスを取得
-	std::memcpy(vertexData, modelData.vertices.data(), sizeof(VertexData) * modelData.vertices.size());//頂点データをリソースにコピー
+	ModelData modelData = LoadObjFile("resources", "plane.obj");
+
+
+	// 頂点バッファ用のリソース
+	Microsoft::WRL::ComPtr<ID3D12Resource> instancingVertexResource = CreateBufferResource(device, sizeof(VertexData) * UINT(modelData.vertices.size()));
+	// 頂点バッファビューを作成する
+	D3D12_VERTEX_BUFFER_VIEW instancingVertexBufferView{};
+	// リソースの先頭のアドレスから使う
+	instancingVertexBufferView.BufferLocation = instancingVertexResource->GetGPUVirtualAddress();
+	// 使用するリソースのサイズは頂点4つ分のサイズ
+	instancingVertexBufferView.SizeInBytes = sizeof(VertexData) * UINT(modelData.vertices.size());
+	// 1頂点あたりのサイズ
+	instancingVertexBufferView.StrideInBytes = sizeof(VertexData);
+
+	// インデックスバッファビューを作成する
+	D3D12_INDEX_BUFFER_VIEW instancingIndexBufferView{};
+	// 使用するリソースのサイズはインデックス6つ分のサイズ
+	instancingIndexBufferView.SizeInBytes = sizeof(uint32_t) * 6;
+	Microsoft::WRL::ComPtr<ID3D12Resource> instancingIndexResource = CreateBufferResource(device, instancingIndexBufferView.SizeInBytes);
+	// インデックスはuint32_tで表す
+	instancingIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+
+	// 頂点リソースにデータを書き込む
+	VertexData* instancingVertexData = nullptr;
+	// 書き込むためのアドレスを取得
+	instancingVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingVertexData));
+
+	instancingVertexData[0].position = { 1.0f, 1.0f, 0.0f, 1.0f };
+	instancingVertexData[0].texcoord = { 0.0f, 0.0f };
+	instancingVertexData[0].normal = { 0.0f, 0.0f, 1.0f };
+
+	instancingVertexData[1].position = { -1.0f, 1.0f, 0.0f, 1.0f };
+	instancingVertexData[1].texcoord = { 1.0f, 0.0f };
+	instancingVertexData[1].normal = { 0.0f, 0.0f, 1.0f };
+
+	instancingVertexData[2].position = { 1.0f, -1.0f, 0.0f, 1.0f };
+	instancingVertexData[2].texcoord = { 0.0f, 1.0f };
+	instancingVertexData[2].normal = { 0.0f, 0.0f, 1.0f };
+
+	instancingVertexData[3].position = { 1.0f, -1.0f, 0.0f, 1.0f };
+	instancingVertexData[3].texcoord = { 0.0f, 1.0f };
+	instancingVertexData[3].normal = { 0.0f, 0.0f, 1.0f };
+
+	instancingVertexData[4].position = { -1.0f, 1.0f, 0.0f, 1.0f };
+	instancingVertexData[4].texcoord = { 1.0f, 0.0f };
+	instancingVertexData[4].normal = { 0.0f, 0.0f, 1.0f };
+
+	instancingVertexData[5].position = { -1.0f, -1.0f, 0.0f, 1.0f };
+	instancingVertexData[5].texcoord = { 1.0f, 1.0f };
+	instancingVertexData[5].normal = { 0.0f, 0.0f, 1.0f };
+
+
+	////頂点リソースを作る
+	//Microsoft::WRL::ComPtr<ID3D12Resource> vertexResource = CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
+	////頂点バッファビューを作成する
+	//D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+	//vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();//リソースの先頭のアドレスから使う
+	//vertexBufferView.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());//使用するリソースのサイズは頂点のサイズ
+	//vertexBufferView.StrideInBytes = sizeof(VertexData);//1頂点のサイズ
+
+
+
+	////頂点リソースにデータを書き込む
+	//VertexData* vertexData = nullptr;
+	//vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));//書き込むためのアドレスを取得
+	//std::memcpy(vertexData, modelData.vertices.data(), sizeof(VertexData) * modelData.vertices.size());//頂点データをリソースにコピー
+
+	//Obj用のtransformationMatrix用のリソースを作る。matrix4x4　1つ分のサイズを用意する
+	Microsoft::WRL::ComPtr<ID3D12Resource> transformationMatrixResourceObj = CreateBufferResource(device, sizeof(Matrix4x4));
+	//データを書き込む
+	Matrix4x4* transformationMatrixDataObj = nullptr;
+	//書き込むためのアドレスを取得
+	transformationMatrixResourceObj->Map(0, nullptr, reinterpret_cast<void**>(&transformationMatrixDataObj));
+	//単位行列を書き込んでおく
+	*transformationMatrixDataObj = MakeIdentity4x4();
+
+
+	//マテリアル用のリソースを作る。今回はcolor1つ分のサイズ用意する
+	Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceObj = CreateBufferResource(device, sizeof(Material));
+	//マテリアルにデータを書き込む
+	Material* materialDataObj = nullptr;
+	//書き込むためのアドレスを取得
+	materialResourceObj->Map(0, nullptr, reinterpret_cast<void**>(&materialDataObj));
+	//今回は赤を書き込んでみる
+	materialDataObj->color = Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+	materialDataObj->enableLighting = true;
+	materialDataObj->uvTransform = MakeIdentity4x4();
+
+
+	//WVP用のリソースを作る。matrix4x4　1つ分のサイズを用意する
+	Microsoft::WRL::ComPtr<ID3D12Resource> wvpResourceObj = CreateBufferResource(device, sizeof(TransformationMatrix));
+
+	//データを読み込む
+	TransformationMatrix* wvpDataObj = nullptr;
+	//書き込むためのアドレスを取得
+	wvpResourceObj->Map(0, nullptr, reinterpret_cast<void**>(&wvpDataObj));
+	//単位行列を書き込んでおく
+	wvpDataObj->WVP = MakeIdentity4x4();
+
+
+
+
 
 
 
@@ -1367,7 +1673,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	const uint32_t indexCount = kSubdivision * kSubdivision * 6;
 
 
-	ID3D12Resource* vertexResourceSphere = CreateBufferResource(device, sizeof(VertexData) * vertexCount);
+	Microsoft::WRL::ComPtr<ID3D12Resource> vertexResourceSphere = CreateBufferResource(device, sizeof(VertexData) * vertexCount);
 
 
 	// 頂点バッファビューを作成する
@@ -1475,7 +1781,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma region indexSphere
 	// インデックスリソース作成
-	ID3D12Resource* indexResourceSphere = CreateBufferResource(device, sizeof(uint32_t) * indexCount);
+	Microsoft::WRL::ComPtr<ID3D12Resource> indexResourceSphere = CreateBufferResource(device, sizeof(uint32_t) * indexCount);
 
 	// インデックスバッファビュー作成
 	D3D12_INDEX_BUFFER_VIEW indexBufferViewSphere{};
@@ -1537,7 +1843,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region Material用
 
 	// マテリアル用のリソースを作る。今回はcolor1つ分のサイズを用意する
-	ID3D12Resource* materialResource = CreateBufferResource(device, sizeof(Material));
+	Microsoft::WRL::ComPtr<ID3D12Resource> materialResource = CreateBufferResource(device, sizeof(Material));
 	// マテリアルにデータを書き込む
 	Material* materialData = nullptr;
 	// 書き込むためのアドレスを取得
@@ -1554,7 +1860,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region WVP
 
 	// WVB用のリソースを作る。Matrix4x4 一つ分のサイズを用意する
-	ID3D12Resource* wvpResource = CreateBufferResource(device, sizeof(TransformationMatrix));
+	Microsoft::WRL::ComPtr<ID3D12Resource> wvpResource = CreateBufferResource(device, sizeof(TransformationMatrix));
 
 	TransformationMatrix* wvpData = nullptr;
 
@@ -1571,7 +1877,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma region Sprite用のマテリアル
 
-	ID3D12Resource* materialResourceSprite = CreateBufferResource(device, sizeof(Material));
+	Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite = CreateBufferResource(device, sizeof(Material));
 
 	Material* materialSpriteData = nullptr;
 
@@ -1593,7 +1899,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 #pragma region 平行光原
 
-	ID3D12Resource* directionalLightResource = CreateBufferResource(device, sizeof(DirectionalLight));
+	Microsoft::WRL::ComPtr<ID3D12Resource> directionalLightResource = CreateBufferResource(device, sizeof(DirectionalLight));
 
 	DirectionalLight* directionalLightData = nullptr;
 
@@ -1605,6 +1911,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 	directionalLightData->intensity = 1.0f;
 
+	directionalLightData->direction = Normalize(directionalLightData->direction);
+
+
 #pragma endregion
 
 #pragma region ImGuiの初期化
@@ -1613,12 +1922,26 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	ImGui::CreateContext();
 	ImGui::StyleColorsDark();
 	ImGui_ImplWin32_Init(hwnd);
-	ImGui_ImplDX12_Init(device,
+	ImGui_ImplDX12_Init(device.Get(),
 		swapChainDesc.BufferCount,
 		rtvDesc.Format,
-		srvDescriptorHeap,
+		srvDescriptorHeap.Get(),
 		srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
 		srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+
+	// Transform変数を作る
+	Transform transform{ {1.0f,1.0f,1.0f},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
+	Transform cameraTransfrom{ {1.0f,1.0f,1.0f},{0.2f,3.14f,0.0f},{0.0f,2.0f,10.0f} };
+	Transform transformSprite{ {1.0f,1.0f,1.0f,},{0.0f,0.0f,0.0f},{0.0f,0.0f,0.0f} };
+	Transform uvTransformSprite{
+		{1.0f,1.0f,1.0f},
+		{0.0f,0.0f,0.0f},
+		{0.0f,0.0f,0.0f}
+	};
+
+	Transform transformObj{ {1.5f, 1.5f, 1.5f},{0.0f,0.0f,0.0f}, {0.0f,0.0f,0.0f} };
+	Transform cameraTransformObj{ {1.0f, 1.0f, 1.0f}, {0.0f,0.0f,0.0f}, {0.0f,0.0f,-10.0f} };
+
 
 #pragma endregion
 
@@ -1659,13 +1982,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			// Noneにしておく
 			barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 			// バリアを張る対象のリソース。現在のバックバッファに対して行う
-			barrier.Transition.pResource = swapChainResources[backBufferIndex];
+			barrier.Transition.pResource = swapChainResources[backBufferIndex].Get();
 			// 遷移前(現在)のResourceState
 			barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
 			// 遷移後のResoureceState
 			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 			// TransitionBarrierを張る
 			commandList->ResourceBarrier(1, &barrier);
+
+
 			// 球描画
 			//transform.rotate.y += 0.03f;
 			Matrix4x4 worldMatrix = MakeAffine(transform.scale, transform.rotate, transform.translate);
@@ -1683,6 +2008,38 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			Matrix4x4 worldViewProjectionMatrixSprite = Multipty(worldMatrixSprite, Multipty(viewMatrixSprite, projectionMatrixSprite));
 			*transformationMatirxDataSprite = worldViewProjectionMatrixSprite;
 
+
+
+			for (uint32_t index = 0; index < kNumInstance; ++index) {
+				Matrix4x4 worldMatrix = MakeAffine(transforms[index].scale, transforms[index].rotate, transforms[index].translate);
+				Matrix4x4 worldViewProjectionMatrix = Multipty(worldMatrix, Multipty(viewMatrix, projectionMatrix));
+				instancingData[index].WVP = worldViewProjectionMatrix;
+				instancingData[index].World = worldMatrix;
+			}
+
+			//Obj用
+			Matrix4x4 worldMatrixObj = MakeAffine(
+				transformObj.scale, transformObj.rotate, transformObj.translate);
+
+			Matrix4x4 cameraMatrixObj =
+				MakeAffine(cameraTransformObj.scale, cameraTransformObj.rotate,
+					cameraTransformObj.translate);
+
+			Matrix4x4 viewMatrixObj = Inverse(cameraMatrixObj);
+
+			Matrix4x4 projectionMatrixObj = PerspectiveFov(
+				0.45f, float(kClientWidth) / float(kClientHeight), 0.1f, 100.0f);
+
+			Matrix4x4 worldViewProjectionMatrixObj =
+				Multipty(worldMatrixObj, Multipty(viewMatrixObj, projectionMatrixObj));
+
+
+
+			wvpDataObj->WVP = worldViewProjectionMatrixObj;
+			wvpDataObj->World = worldMatrixObj;
+
+
+
 			bool temp_enableLightFlag = (materialData->enableLighting == 1);
 
 			directionalLightData->direction = Normalize(directionalLightData->direction);
@@ -1698,11 +2055,17 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			ImGui::SliderAngle("SphereRotateX", &transform.rotate.x);
 			ImGui::SliderAngle("SphereRotateY", &transform.rotate.y);
 			ImGui::SliderAngle("SphereRotateZ", &transform.rotate.z);
+			ImGui::SliderAngle("ObjRotateX", &transformObj.rotate.x);
+			ImGui::SliderAngle("ObjRotateY", &transformObj.rotate.y);
+			ImGui::SliderAngle("ObjRotateZ", &transformObj.rotate.z);
 			ImGui::Checkbox("useMonsterBall", &useMonsterBall);
 			if (ImGui::Checkbox("enableLightFlag", &temp_enableLightFlag)) {
 				materialData->enableLighting = temp_enableLightFlag ? 1 : 0;
 			}
 			ImGui::SliderFloat3("Light", &directionalLightData->direction.x, -1.0f, 0.8f);
+			ImGui::ColorEdit4("LightColor", &directionalLightData->color.x);
+
+			ImGui::DragFloat("Intensity##Sprite", &directionalLightData->intensity);
 
 			ImGui::DragFloat2("UVTranslate", &uvTransformSprite.translate.x, 0.01f, -10.0f, 10.0f);
 			ImGui::DragFloat2("UVScale", &uvTransformSprite.scale.x, 0.01f, -10.0f, 10.0f);
@@ -1735,43 +2098,67 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
 			// 描画用のDescriptorHeapの設定
-			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
-			commandList->SetDescriptorHeaps(1, descriptorHeaps);
+			Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>descriptorHeaps[] = { srvDescriptorHeap };
+			commandList->SetDescriptorHeaps(1, descriptorHeaps->GetAddressOf());
 
 			commandList->RSSetViewports(1, &viewport);// Viewportを設定
 			commandList->RSSetScissorRects(1, &scissorRect);// Scirssorを設定
 			// rootSignatrueを設定。PSOに設定してるけど別途設定が必要
-			commandList->SetGraphicsRootSignature(rootSignatrue);
-			commandList->SetPipelineState(graphicsPinelineState); //PSOを設定
-			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSphere); // VBVを設定
+			commandList->SetGraphicsRootSignature(rootSignatrue.Get());
+			commandList->SetPipelineState(graphicsPinelineState.Get()); //PSOを設定
+			//commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSphere); // VBVを設定
 			commandList->IASetIndexBuffer(&indexBufferViewSphere);
 
 			// 形状を設定。PSOに設定しているものとは別。同じものを設定すると考えておけば良い
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 #pragma region sphereの描画
+			commandList->SetGraphicsRootDescriptorTable(1, instancingSrvHandleGPU);
+
+
 			// wvp用のCBufferの場所を設定
-			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
+			//commandList->SetGraphicsRootDescriptorTable(1, wvpResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU);
 			// マテリアルCBuffer
 			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
 			//平行光源用CBufferの場所を設定
 			commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
 
-			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSphere);
 
 			// 描画！(DraoCall/ドローコール)。3頂点で1つのインスタンス。インスタンスについては今後
 			//commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
-			commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
+			//commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
 #pragma endregion
+
+
+			//objの描画
+			// RootSignatureを設定。PSOに設定しているけど別途設定が必要
+			commandList->SetGraphicsRootSignature(rootSignatrue.Get());
+			commandList->SetPipelineState(graphicsPinelineState.Get());
+			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+			// 形状を設定。PSOに設定しているものとはまた別。同じものを設定すると考えておけば良い
+			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			commandList->SetGraphicsRootConstantBufferView(
+				0, materialResourceObj->GetGPUVirtualAddress());
+			// wvp用のCBufferの場所を設定
+			//commandList->SetGraphicsRootConstantBufferView(
+			//	1, wvpResourceObj->GetGPUVirtualAddress());
+			// SRVのDescriptorTableの先頭を設定。2はrootParameter[2]である。
+			commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU);
+
+			//commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
 
 
 			// Spriteの描画
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite); // VBVを設定
+
+
+
 			// マテリアルCBuffer
 			commandList->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
+			//commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
 
 			// 描画！(DraoCall/ドローコール)
 			//commandList->DrawInstanced(6, 1, 0, 0);
@@ -1779,12 +2166,21 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
 			commandList->IASetIndexBuffer(&indexBufferViewSprite);//IBVを設定
 
+			//commandList->SetGraphicsRootConstantBufferView(3, materialResourceDirectionSprite->GetGPUVirtualAddress());
+
+
+
 			//描画!(DrawCall/ドローコー)6個のインデックスを使用し1つのインスタンスを描画。その他は当面0で良い
-			commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+			//commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+			commandList->IASetVertexBuffers(0, 1, &instancingVertexBufferView);   // VBVを設定
+			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
+			commandList->SetGraphicsRootDescriptorTable(1, instancingSrvHandleGPU);
+			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
+			commandList->DrawInstanced(UINT(modelData.vertices.size()), kNumInstance, 0, 0);
 
 
 			// 実際のcommandListのImGuiの描画コマンドを積む
-			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
 
 			// 画面に描く処理はすべて終わり、画面に移すので、状態を遷移
 			// 今回はRenderTargetからPresentにする
@@ -1801,8 +2197,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			assert(SUCCEEDED(hr));
 
 			// GPUにコマンドリストの実行を行われる
-			ID3D12CommandList* commandLists[] = { commandList };
-			commandQueue->ExecuteCommandLists(1, commandLists);
+			Microsoft::WRL::ComPtr<ID3D12CommandList> commandLists[] = { commandList };
+			commandQueue->ExecuteCommandLists(1, commandLists->GetAddressOf());
 
 			// GPUとOSに画面の交換を行うよう通知する
 			swapChain->Present(1, 0);
@@ -1810,7 +2206,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			// Fenseの値を更新
 			fenceValue++;
 			// GPUがここまでたどり着いたときに、Fenceの値を指定した値の代入するようにSignalを送る
-			commandQueue->Signal(fence, fenceValue);
+			commandQueue->Signal(fence.Get(), fenceValue);
 
 			// Fenceの値が指定したSignal値にたどり着いているか確認する
 			// GetCompletedValueの初期値はFence作成時に渡した初期値
@@ -1825,7 +2221,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 			// 次のフレーム用のコマンドリストを準備
 			hr = commandAllocator->Reset();
 			assert(SUCCEEDED(hr));
-			hr = commandList->Reset(commandAllocator, nullptr);
+			hr = commandList->Reset(commandAllocator.Get(), nullptr);
 			assert(SUCCEEDED(hr));
 
 
@@ -1844,7 +2240,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 #pragma region オブジェクトを解放
 
 	CloseHandle(fenceEvent);
-	fence->Release();
+	/*fence->6();
 	rtvDescriptorHeap->Release();
 	swapChainResources[0]->Release();
 	swapChainResources[1]->Release();
@@ -1868,9 +2264,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	wvpResource->Release();
 	srvDescriptorHeap->Release();
 	mipImages.Release();
-	textrueResource->Release();
+	textureResource->Release();
 	intermediateResource->Release();
-	deptStencilResource->Release();
+	depthStencilResource->Release();
 	dsvDescriptorHaap->Release();
 	vertexResourceSprite->Release();
 	transformationMatrixResourceSprite->Release();
@@ -1880,25 +2276,31 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 	materialResourceSprite->Release();
 	directionalLightResource->Release();
 	indexResourceSprite->Release();
-	indexResourceSphere->Release();
+	indexResourceSphere->Release();*/
 	//transformationMatrixResourceSphere->Release();
 
 #ifdef _DEBUG
 
-	debugController->Release();
+	//debugController->Release();
 
 #endif // _DEBUG
 	CloseWindow(hwnd);
 
 	// リソースリークチェック
-	IDXGIDebug1* debug;
+	/*Microsoft::WRL::ComPtr<IDXGIDebug1> debug;
 	if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug)))) {
 		debug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_ALL);
 		debug->ReportLiveObjects(DXGI_DEBUG_APP, DXGI_DEBUG_RLO_ALL);
 		debug->ReportLiveObjects(DXGI_DEBUG_D3D12, DXGI_DEBUG_RLO_ALL);
 		debug->Release();
-	}
+	}*/
 #pragma endregion
+
+	////xAudio2解放
+	//xAudio2.Reset();
+
+	////音声データ解放
+	//SoundUnload(&soundData1);
 
 
 	//出力ウィンドウへの文字出力
