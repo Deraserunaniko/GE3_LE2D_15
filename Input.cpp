@@ -9,12 +9,17 @@
 
 //using namespace Microsoft::WRL;
 
-void Input::Initialize(HINSTANCE histance, HWND hwnd)
+void Input::Initialize(WinApp* winApp)
 {
+	//借りてきたWinAppのインスタンスうぃ記録
+	this->winApp_ = winApp;
+
 	HRESULT result;
+
+
 	//DirectInputの初期化
 	//ComPtr<IDirectInput8> directInput = nullptr;
-	result = DirectInput8Create(histance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
+	result = DirectInput8Create(winApp->GetHinstance(), DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
 	assert(SUCCEEDED(result));
 
 	//キーボードデバイスの生成
@@ -27,7 +32,7 @@ void Input::Initialize(HINSTANCE histance, HWND hwnd)
 	assert(SUCCEEDED(result));
 
 	//排他制御レベルのセット
-	result = keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
+	result = keyboard->SetCooperativeLevel(winApp->GetHwnd(), DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY);
 	assert(SUCCEEDED(result));
 
 }
@@ -49,7 +54,8 @@ void Input::Update()
 bool Input::PushKey(BYTE keyNumber)
 {
 
-	if (key[keyNumber]) {
+	if (key[keyNumber])
+	{
 		return true;
 	}
 	//そうでなければfalseを返す
@@ -58,7 +64,8 @@ bool Input::PushKey(BYTE keyNumber)
 
 bool Input::TriggerKey(BYTE keyNumber)
 {
-	if (!keyPre[keyNumber] && key[keyNumber]) {
+	if (!keyPre[keyNumber] && key[keyNumber]) 
+	{
 		return true;
 	}
 	return false;

@@ -1,19 +1,16 @@
 ﻿#include "WinApp.h"
 #include <cassert>
 #include "externals/imgui//imgui.h"
-
-
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-
 // ウィンドウプロシーシャ
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+LRESULT CALLBACK WinApp::WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
+{
 
 	if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) {
 
 		return true;
 	}
-
 	// メッセージに応じてゲーム固有の処理を行う
 	switch (msg) {
 		// ウィンドウが破壊された
@@ -34,7 +31,7 @@ void WinApp::Initialize()
 	HRESULT hr = CoInitializeEx(0, COINIT_MULTITHREADED);
 	// ウィンドウプロシーシャ
 	wc.lpfnWndProc = WindowProc;
-	// ウィンドウクラス名（なんでもいい）
+	// ウィンドウクラス名
 	wc.lpszClassName = L"CG2WindowClass";
 	// インスタンスハンドル
 	wc.hInstance = GetModuleHandle(nullptr);
@@ -69,5 +66,30 @@ void WinApp::Initialize()
 
 void WinApp::Update()
 {
+}
 
+void WinApp::Finalize() 
+{
+	CloseWindow(hwnd);
+	// COMの終了処理
+	CoUninitialize();
+}
+
+bool WinApp::ProcessMessage()
+{
+	return false;
+
+	MSG msg{};
+
+	if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) 
+	{
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+
+	if (msg.message == WM_QUIT)
+	{
+		return true;
+	}
+	return false;
 }
