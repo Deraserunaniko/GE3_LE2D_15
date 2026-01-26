@@ -7,6 +7,7 @@ struct Vector3 {
 	float x, y, z;
 };
 
+
 namespace MatrixMath {
 	// 行列の加法
 	Matrix4x4 Add(const Matrix4x4& m1, const Matrix4x4& m2);

@@ -3,6 +3,7 @@ struct VertexShaderOutput
     float32_t4 position : SV_POSITION;
     float32_t2 texcoord : TEXCOORD0;
     float32_t3 normal : NORMAL0;
+    float32_t3 worldPosiiton : POSITION0;
 };
 
 struct VertexShaderInput
@@ -10,7 +11,6 @@ struct VertexShaderInput
     float32_t4 position : POSITION0;
     float32_t2 texcoord : TEXCOORD0;
     float32_t3 normal : NORMAL0;
-    float32_t3 worldPosition : POSITTON0;
 };
 
 struct TransformationMatrix
@@ -23,6 +23,8 @@ struct Material
 {
     float32_t4 color;
     int32_t enableLighting;
+    float32_t4x4 uvTransfotm;
+    float shininess;
 };
 
 
@@ -33,4 +35,9 @@ struct DirectionalLight
     float32_t3 direction; //!<ƒ‰ƒCƒg‚ÌŒü‚«
     
     float intensity; //!<‹P“x
+};
+
+struct Camera
+{
+    float32_t3 worldPosition;
 };
