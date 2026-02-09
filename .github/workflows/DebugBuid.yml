@@ -1,6 +1,6 @@
-name : DebugBuild
-on : 
-  push :
+name: DebugBuild
+on: 
+  push:
     branches:
     - master
 env:
@@ -8,9 +8,9 @@ env:
   SOLUTION_FILE_PATH: project/CG2_LE2D_16.sln
   #　Visual Studio の構成
   CONFIGURATION: Debug
-jobs :
-  build :
-    runs-on : windows-2022
+jobs:
+  build:
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
