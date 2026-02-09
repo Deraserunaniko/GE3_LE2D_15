@@ -37,6 +37,9 @@
     <Filter Include="engine\scene">
       <UniqueIdentifier>{29c93471-f475-4df3-9358-878342cf05e5}</UniqueIdentifier>
     </Filter>
+    <Filter Include="engine\math">
+      <UniqueIdentifier>{b72d7fba-d1ec-48bb-b579-76e3e7225473}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -63,32 +66,35 @@
     <ClCompile Include="externals\imgui\imgui_impl_win32.cpp">
       <Filter>imgui</Filter>
     </ClCompile>
-    <ClCompile Include="engine\math\Matrix4x4.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\base\Input.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\base\WinApp.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\base\DirectXCommon.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\base\Logger.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
-    <ClCompile Include="engine\base\StringUtility.cpp">
-      <Filter>ソース ファイル</Filter>
-    </ClCompile>
     <ClCompile Include="engine\2d\Sprite.cpp">
-      <Filter>ソース ファイル</Filter>
+      <Filter>engine\2d</Filter>
     </ClCompile>
     <ClCompile Include="engine\2d\SpriteCommon.cpp">
-      <Filter>ソース ファイル</Filter>
+      <Filter>engine\2d</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\Function.cpp">
+      <Filter>engine\base</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\DirectXCommon.cpp">
+      <Filter>engine\base</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\Input.cpp">
+      <Filter>engine\base</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\Logger.cpp">
+      <Filter>engine\base</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\math\Matrix4x4.cpp">
+      <Filter>engine\math</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\StringUtility.cpp">
+      <Filter>engine\base</Filter>
     </ClCompile>
     <ClCompile Include="engine\base\TextureManager.cpp">
-      <Filter>ソース ファイル</Filter>
+      <Filter>engine\base</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\base\WinApp.cpp">
+      <Filter>engine\base</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -96,15 +102,6 @@
     <FxCompile Include="resources\shaders\Object3d.PS.hlsl" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="engine\math\Matrix4x4.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\math\Vector3.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\math\Vector4.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
     <ClInclude Include="externals\imgui\imconfig.h">
       <Filter>imgui</Filter>
     </ClInclude>
@@ -129,38 +126,50 @@
     <ClInclude Include="externals\imgui\imgui_impl_win32.h">
       <Filter>imgui</Filter>
     </ClInclude>
-    <ClInclude Include="engine\base\VertexData.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\math\Vector2.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\math\Matrix3x3.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\base\Input.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\base\WinApp.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\base\DirectXCommon.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\base\Logger.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
-    <ClInclude Include="engine\base\StringUtility.h">
-      <Filter>ヘッダー ファイル</Filter>
-    </ClInclude>
     <ClInclude Include="engine\2d\Sprite.h">
-      <Filter>ヘッダー ファイル</Filter>
+      <Filter>engine\2d</Filter>
     </ClInclude>
     <ClInclude Include="engine\2d\SpriteCommon.h">
-      <Filter>ヘッダー ファイル</Filter>
+      <Filter>engine\2d</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\Function.h">
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\DirectXCommon.h">
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\Input.h">
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\Logger.h">
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\math\Vector2.h">
+      <Filter>engine\math</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\math\Matrix3x3.h">
+      <Filter>engine\math</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\math\Matrix4x4.h">
+      <Filter>engine\math</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\math\Vector3.h">
+      <Filter>engine\math</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\math\Vector4.h">
+      <Filter>engine\math</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\StringUtility.h">
+      <Filter>engine\base</Filter>
     </ClInclude>
     <ClInclude Include="engine\base\TextureManager.h">
-      <Filter>ヘッダー ファイル</Filter>
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\VertexData.h">
+      <Filter>engine\base</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\base\WinApp.h">
+      <Filter>engine\base</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
