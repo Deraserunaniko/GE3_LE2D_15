@@ -2,22 +2,16 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl.h>
-#include "WinApp.h"
-#include "Logger.h"
-#include <dxcapi.h>
-#include<Windows.h>
 #include <array>
-#include <cassert>
+#include "WinApp.h"
+#include <dxcapi.h>
 #include <string>
 #include "StringUtility.h"
-
 #include "externals/DirectXTex/DirectXTex.h"
+#include <chrono>
 
-#include "externals/imgui//imgui.h"
-#include "externals/imgui/imgui_impl_dx12.h"
-#include "externals/imgui/imgui_impl_win32.h"
-#include "externals/DirectXTex/d3dx12.h"
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+//extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
 class DirectXCommon
@@ -87,6 +81,10 @@ public://メンバ関数
 	Microsoft::WRL::ComPtr<ID3D12Resource>UploadTextureData(Microsoft::WRL::ComPtr<ID3D12Resource> texture, const DirectX::ScratchImage& mipImages);
 
 	static DirectX::ScratchImage LoadTexture(const std::string& filePath);
+
+	//最大SRV数(最大テクスチャ枚数)
+	static const uint32_t kMaxSRVCount;
+
 
 private:
 	WinApp* winApp = nullptr;
@@ -180,4 +178,13 @@ private:
 	//フェンス値
 	UINT64 fenceValue;
 
+	//FPS固定初期化
+	void InitializeFixFPS();
+
+	//FPS固定更新
+	void UpdateFixFPS();
+
+	//メンバ関数
+	//記録時間
+	std::chrono::steady_clock::time_point reference_;
 };

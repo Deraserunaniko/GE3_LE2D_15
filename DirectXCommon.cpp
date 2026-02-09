@@ -2,13 +2,21 @@
 #include <cassert>
 #include <filesystem>
 #include <chrono>
-#include <string>
 #include <format>
+#include <iostream>
 
 #pragma comment(lib,"d3d12.lib")
 #pragma comment(lib,"dxgi.lib")
+#include "externals/imgui//imgui.h"
+#include "externals/imgui/imgui_impl_dx12.h"
+#include "externals/imgui/imgui_impl_win32.h"
+#include "externals/DirectXTex/d3dx12.h"
+#include <thread>
 
 using namespace Microsoft::WRL;
+
+const uint32_t DirectXCommon::kMaxSRVCount = 512;
+
 
 void DirectXCommon::Initialize(WinApp* winApp) {
 
@@ -16,6 +24,7 @@ void DirectXCommon::Initialize(WinApp* winApp) {
 	assert(winApp);
 	this->winApp = winApp;
 
+	InitializeFixFPS();
 
 	Deviceinitialize();
 
@@ -107,7 +116,37 @@ void DirectXCommon::Deviceinitialize() {
 	// デバイスの生成がうまくいかなかったので起動できない
 	assert(device != nullptr);
 	//Log(logStream, ConvertString(L"Complete create D3D12Device!!!\n"));// 初期化完了のログを出す
+
+#ifdef _DEBUG
+
+	Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue = nullptr;
+	if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+		// やばいエラー時に止まる
+		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, true);
+		// エラー時に止まる
+		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, true);
+		// 警告時に泊まる
+		infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, true);
+		// 抑制するメッセージのＩＤ
+		D3D12_MESSAGE_ID denyIds[] = {
+			// windows11でのDXGIデバックレイヤーとDX12デバックレイヤーの相互作用バグによるエラーメッセージ
+			// https://stackoverflow.com/questions/69805245/directx-12-application-is-crashing-in-windows-11
+			D3D12_MESSAGE_ID_RESOURCE_BARRIER_MISMATCHING_COMMAND_LIST_TYPE };
+		// 抑制するレベル
+		D3D12_MESSAGE_SEVERITY severities[] = { D3D12_MESSAGE_SEVERITY_INFO };
+		D3D12_INFO_QUEUE_FILTER filter{};
+		filter.DenyList.NumIDs = _countof(denyIds);
+		filter.DenyList.pIDList = denyIds;
+		filter.DenyList.NumSeverities = _countof(severities);
+		filter.DenyList.pSeverityList = severities;
+		// 指定したメッセージの表示wp抑制する
+		infoQueue->PushStorageFilter(&filter);
+	}
+
+#endif // _DEBUG
+
 }
+
 
 void DirectXCommon::CommandListInitialize() {
 
@@ -177,7 +216,7 @@ void DirectXCommon::CreateDescriptorHeaps()
 	descriptorSizeRTV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	descriptorSizeDSV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
-	srvDescriptorHeap = CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 128, true);
+	srvDescriptorHeap = CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxSRVCount, true);
 	rtvDescriptorHeap = CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2, false);
 	dsvDescriptorHeap = CreateDescriptorHeap(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 }
@@ -193,7 +232,6 @@ void DirectXCommon::CreateRTV()
 	hr = swapChain->GetBuffer(1, IID_PPV_ARGS(&swapChainResources[1]));
 	assert(SUCCEEDED(hr));
 	// RTVの設定
-	D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
 	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; // 出力結果をSRGBに変換して書き込む
 	rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D; // 2dテクスチャとして読み込む
 	// ディスクリプタの先頭を取得する。
@@ -316,6 +354,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE DirectXCommon::GetGPUDescriptorHandle(Microsoft::WRL
 }
 
 
+
 D3D12_CPU_DESCRIPTOR_HANDLE DirectXCommon::GetSRVCPUDescriptorHandle(uint32_t index)
 {
 	return GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, index);
@@ -388,7 +427,7 @@ void DirectXCommon::PreDraw()
 	commandList->ResourceBarrier(1, &barrier);
 
 	//描画先のRTVを設定
-	commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, nullptr);
+	//commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], false, nullptr);
 
 	//描画先のDSVを設定
 	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
@@ -442,6 +481,8 @@ void DirectXCommon::PostDraw()
 	//GPUにコマンドリストを実行させる
 	Microsoft::WRL::ComPtr<ID3D12CommandList> commandLists[] = { commandList };
 	commandQueue->ExecuteCommandLists(1, commandLists->GetAddressOf());
+
+	UpdateFixFPS();
 
 	//GPUとOSに画面交換を行うように通知
 	swapChain->Present(1, 0);
@@ -631,4 +672,32 @@ DirectX::ScratchImage DirectXCommon::LoadTexture(const std::string& filePath)
 
 	// ミップマップ付きのデータを返す
 	return mipImages;
+}
+
+void DirectXCommon::InitializeFixFPS()
+{
+	reference_ = std::chrono::steady_clock::now();
+}
+
+void DirectXCommon::UpdateFixFPS()
+{
+	// 1/60秒ピッタリの時間
+	const std::chrono::microseconds kMinTime(uint64_t(1000000.0f / 60.0f));
+	// 1/60秒よりわずかに短い時間
+	const std::chrono::microseconds kMinCheckTime(uint64_t(1000000.0f / 65.0f));
+
+	//現在時間を取得する
+	std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+	//前回記録からの経過時間を取得する
+	std::chrono::microseconds elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - reference_);
+
+	// 1/60秒(よりわずかに短い時間)経ってない場合
+	if (elapsed < kMinCheckTime) {
+		// 1/60秒経過するまで縮小なスリープを繰り返す
+		while (std::chrono::steady_clock::now() - reference_ < kMinTime) {
+			//1マイクロ秒スリープ
+			std::this_thread::sleep_for(std::chrono::microseconds(1));
+		}
+	}
+	reference_ = std::chrono::steady_clock::now();
 }

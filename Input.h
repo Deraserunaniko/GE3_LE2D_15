@@ -5,6 +5,8 @@
 #include <dinput.h>
 #include "WinApp.h"
 
+
+
 class Input
 {
 public:
