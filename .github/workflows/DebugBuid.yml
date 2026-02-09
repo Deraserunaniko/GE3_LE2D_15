@@ -1,4 +1,4 @@
-name: DebugBuild
+name: teachDebugBuild
 on: 
   push:
     branches:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Add MSBuild to PATH
+      - name: Add MSBuild to Path
         uses: microsoft/setup-msbuild@v2
         with:
            msbuild-architecture: x64
