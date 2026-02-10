@@ -38,6 +38,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 
 using namespace MatrixMath;
 
+
 #pragma region 構造体
 
 struct Vector2 {
